@@ -3,7 +3,64 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Mandarin Radicals Practice</title>
+<title>Mandarin Chinese Practice — Radicals &amp; Characters with Pinyin</title>
+<meta name="description" content="Practice Mandarin Chinese in your browser: 214 Kangxi radicals and 477 common characters with pinyin, English meanings, and a simplified/traditional toggle. Free, no signup." />
+<meta name="keywords" content="Mandarin, Chinese, radicals, hanzi, pinyin, characters, flashcards, Kangxi, simplified, traditional, learn Chinese, language learning, spaced repetition" />
+<meta name="author" content="skulitom" />
+<meta name="theme-color" content="#ffb84d" />
+<meta name="color-scheme" content="dark" />
+<meta name="robots" content="index, follow" />
+<link rel="canonical" href="https://skulitom.github.io/chinese-radicals/" />
+
+<!-- Favicon — inline SVG, no extra file needed -->
+<link rel="icon" type="image/svg+xml" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="18" fill="%23ffb84d"/><text x="50" y="74" font-size="68" text-anchor="middle" font-family="serif" fill="%23181b22">汉</text></svg>' />
+
+<!-- Open Graph (Facebook, LinkedIn, Slack, Discord previews) -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Mandarin Chinese Practice" />
+<meta property="og:title" content="Mandarin Chinese Practice — Radicals &amp; Characters" />
+<meta property="og:description" content="Free in-browser drills for the 214 Kangxi radicals and 477 common Chinese characters. Pinyin and English meaning, simplified or traditional." />
+<meta property="og:url" content="https://skulitom.github.io/chinese-radicals/" />
+<meta property="og:locale" content="en_US" />
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="Mandarin Chinese Practice — Radicals &amp; Characters" />
+<meta name="twitter:description" content="Free in-browser drills for the 214 Kangxi radicals and 477 common Chinese characters. Pinyin and English meaning, simplified or traditional." />
+
+<!-- Structured data: tell search engines this is an educational web app -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": ["WebApplication", "EducationalApplication"],
+  "name": "Mandarin Chinese Practice",
+  "description": "Free browser-based practice app for the 214 Kangxi radicals and 477 common Chinese characters. Drills pinyin (sound) and English meaning, with simplified/traditional script toggle and per-character mastery tracking.",
+  "url": "https://skulitom.github.io/chinese-radicals/",
+  "applicationCategory": "EducationalApplication",
+  "applicationSubCategory": "Language Learning",
+  "operatingSystem": "Any",
+  "browserRequirements": "Requires modern browser with JavaScript and localStorage",
+  "isAccessibleForFree": true,
+  "inLanguage": ["en", "zh-Hans", "zh-Hant"],
+  "learningResourceType": "Quiz",
+  "educationalUse": ["Practice", "Self-study"],
+  "audience": {
+    "@type": "EducationalAudience",
+    "educationalRole": "student"
+  },
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "author": {
+    "@type": "Person",
+    "name": "skulitom",
+    "url": "https://github.com/skulitom"
+  },
+  "codeRepository": "https://github.com/skulitom/chinese-radicals"
+}
+</script>
 <style>
   :root {
     --bg: #0f1115;
@@ -110,6 +167,24 @@
   }
   .link-danger { color: var(--wrong); }
   .link-danger:hover { color: var(--wrong); filter: brightness(1.15); }
+  /* SEO-friendly footer with indexable copy. Stays subtle. */
+  .page-footer {
+    padding: 28px 24px 32px; border-top: 1px solid var(--border);
+    font-size: 13px; color: var(--muted); line-height: 1.65;
+    max-width: 760px; margin: 0 auto; width: 100%;
+  }
+  .page-footer h2 {
+    font-size: 13px; font-weight: 600; color: var(--text);
+    margin: 0 0 8px; letter-spacing: 0.3px;
+  }
+  .page-footer p { margin: 0 0 10px; }
+  .page-footer a { color: var(--accent); text-decoration: none; }
+  .page-footer a:hover { text-decoration: underline; }
+  .noscript-msg {
+    max-width: 480px; margin: 60px auto; padding: 24px;
+    background: var(--panel); border: 1px solid var(--wrong); border-radius: 12px;
+    text-align: center; color: var(--text);
+  }
 
   /* Quiz screen */
   .quiz { text-align: center; }
@@ -160,12 +235,17 @@
   .btn-secondary:hover { border-color: var(--accent); }
 
   .hidden { display: none !important; }
+  /* Visually hidden (screen-reader / search-engine only) */
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
 </style>
 </head>
 <body>
 <header>
   <div class="header-left">
-    <h1>汉字 · Mandarin Practice</h1>
+    <h1>汉字 · Mandarin Practice<span class="visually-hidden"> — drill the 214 Kangxi radicals and 477 common Chinese characters with pinyin and English meaning</span></h1>
     <div class="stats" id="stats">
       <span>Score: <b id="score">0</b></span>
       <span>Streak: <b id="streak">0</b></span>
@@ -191,6 +271,12 @@
   </div>
 </header>
 <main>
+  <noscript>
+    <div class="noscript-msg">
+      <h2>JavaScript required</h2>
+      <p>This Mandarin Chinese practice app needs JavaScript to run the quiz, weighted picking, and progress tracking. Please enable JavaScript and reload, or view the source on <a href="https://github.com/skulitom/chinese-radicals">GitHub</a>.</p>
+    </div>
+  </noscript>
   <div class="screen quiz" id="screen-quiz">
     <div class="prompt-label" id="prompt-label">What is the sound?</div>
     <div class="radical" id="radical">氵</div>
@@ -198,6 +284,29 @@
     <div class="feedback" id="feedback"></div>
   </div>
 </main>
+
+<footer class="page-footer">
+  <h2>About this Mandarin practice tool</h2>
+  <p>
+    A free, browser-based app for drilling Chinese characters and radicals. Includes the
+    full set of <strong>214 Kangxi radicals</strong> (the building blocks of every Hanzi)
+    and <strong>477 common characters</strong> covering the first few hundred most-used
+    words. Each item is paired with its pinyin (with tone marks) and a concise English
+    meaning.
+  </p>
+  <p>
+    Switch between <strong>Simplified</strong> (国, 学, 来) and <strong>Traditional</strong>
+    (國, 學, 來) characters at any time — mastery progress is shared across the two forms.
+    Choose your quiz mode (match to pinyin or to meaning) and deck (radicals or
+    characters) from the header. Items you miss come up more often, and three correct
+    answers in a row marks a character as mastered. All progress is stored locally in
+    your browser — no signup, no tracking.
+  </p>
+  <p>
+    Open source on <a href="https://github.com/skulitom/chinese-radicals">GitHub</a>.
+    Issues and contributions welcome.
+  </p>
+</footer>
 
 <!-- Progress / reset modal -->
 <div class="modal-overlay hidden" id="menu-modal">
