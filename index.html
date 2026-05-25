@@ -158,10 +158,24 @@
   }
   .modal-panel h3 { margin: 0 0 16px; font-size: 15px; color: var(--text); }
   #progress-display {
-    display: flex; flex-direction: column; gap: 6px;
+    display: flex; flex-direction: column; gap: 4px;
     font-size: 13px; color: var(--muted); margin-bottom: 22px;
+    font-variant-numeric: tabular-nums;
   }
-  #progress-display .ds-line { white-space: nowrap; }
+  #progress-display .progress-script-note {
+    font-size: 11px; color: var(--muted); opacity: 0.7;
+    margin-bottom: 8px; letter-spacing: 0.3px;
+  }
+  #progress-display .ds-group {
+    font-weight: 600; color: var(--text); margin-top: 10px;
+    font-size: 13px;
+  }
+  #progress-display .ds-group:first-of-type { margin-top: 0; }
+  #progress-display .ds-total { font-weight: 400; color: var(--muted); font-size: 12px; }
+  #progress-display .ds-line {
+    padding-left: 16px; white-space: nowrap;
+  }
+  #progress-display .ds-line b { color: var(--text); }
   .modal-actions {
     display: flex; justify-content: space-between; align-items: center; gap: 12px;
   }
@@ -193,6 +207,12 @@
     font-family: "SimSun", "Noto Serif CJK SC", "Microsoft YaHei", serif;
     transition: color 0.2s ease, transform 0.2s ease;
   }
+  /* Reverse-mode prompt: pinyin / English text instead of a character */
+  .radical.text-prompt {
+    font-size: 56px; padding: 28px 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-weight: 500;
+  }
   .radical.flash-correct { color: var(--correct); }
   .radical.flash-wrong { color: var(--wrong); transform: scale(0.96); }
   .options {
@@ -208,6 +228,11 @@
   .option:disabled { cursor: default; opacity: 0.85; }
   .option.correct { background: rgba(61, 220, 132, 0.18); border-color: var(--correct); color: var(--correct); }
   .option.wrong { background: rgba(255, 90, 90, 0.18); border-color: var(--wrong); color: var(--wrong); }
+  /* Reverse-mode options: each button is a single Chinese character */
+  .option.char-option {
+    font-size: 40px; padding: 18px;
+    font-family: "SimSun", "Noto Serif CJK SC", "Microsoft YaHei", serif;
+  }
   .feedback {
     margin-top: 18px; min-height: 24px; font-size: 14px; color: var(--muted);
   }
@@ -261,6 +286,10 @@
       <button class="toggle-btn" id="script-btn">
         <span data-when="simp">简 Simplified</span>
         <span data-when="trad">繁 Traditional</span>
+      </button>
+      <button class="toggle-btn" id="direction-btn">
+        <span data-when="forward">→ Recognize</span>
+        <span data-when="reverse">← Recall</span>
       </button>
     </div>
     <button class="end-btn" id="menu-btn" title="Progress & reset">⋯</button>
@@ -1043,16 +1072,16 @@ const state = {
   dataset: "radicals", // "radicals" | "characters"
   mode: "sound",       // "sound" | "meaning"
   script: "simp",      // "simp" | "trad"
+  direction: "forward",// "forward" (show char → pick text) | "reverse" (show text → pick char)
   score: 0,
   streak: 0,
   bestStreak: 0,
   current: null,
   answering: true,
-  // progress[dataset][mode][char] = { w, s, m }
-  progress: {
-    radicals: { sound: {}, meaning: {} },
-    characters: { sound: {}, meaning: {} },
-  },
+  // progress[dataset][mode][direction][key] = { w, s, m }
+  // (key is script-aware: entry.char or entry.trad depending on script,
+  // but only when the entry has a different traditional form)
+  progress: null,  // populated by loadProgress() with the correct shape
   lastChar: null,
 };
 
@@ -1088,17 +1117,32 @@ function saveScript() {
   try { localStorage.setItem(SCRIPT_KEY, state.script); } catch {}
 }
 
+const DIRECTION_KEY = "radicalsDirection_v1";
+function loadDirection() {
+  try {
+    const d = localStorage.getItem(DIRECTION_KEY);
+    if (d === "forward" || d === "reverse") state.direction = d;
+  } catch {}
+}
+function saveDirection() {
+  try { localStorage.setItem(DIRECTION_KEY, state.direction); } catch {}
+}
+
 // Display a character honoring the simp/trad toggle. Storage stays keyed on
 // the canonical `char` so mastery is shared across the two display modes.
 function displayChar(r) {
   return state.script === "trad" && r.trad ? r.trad : r.char;
 }
 
-// --- Per-(dataset,mode) progress / persistence ------------------------------
-// progress[dataset][mode][char] = { w: weight, s: correct-streak, m: mastered }
+// --- Per-(dataset,mode,direction) progress / persistence --------------------
+// progress[dataset][mode][direction][key] = { w: weight, s: correct-streak, m: mastered }
 // Entry is omitted when w=1, s=0, m=false (default) to keep storage small.
-const STORAGE_KEY = "radicalsProgress_v3";
-const LEGACY_KEY = "radicalsProgress_v2";    // migrate from this if present
+//
+// The per-entry `key` is script-aware:
+//   - no `trad` field → key is `entry.char` (mastery shared across simp/trad)
+//   - has `trad` field → key is `entry.char` in simp mode, `entry.trad` in trad mode
+//     (so 国 / 國 are tracked separately, but 山 stays a single counter)
+const STORAGE_KEY = "radicalsProgress_v4";
 const DEFAULT_WEIGHT = 1;
 const WRONG_BONUS = 4;          // wrong answer adds this to weight
 const RIGHT_DECAY = 1;          // correct answer subtracts this (floored at 1)
@@ -1106,25 +1150,50 @@ const MASTERY_THRESHOLD = 3;    // correct-in-a-row needed to master
 const MASTERED_WEIGHT = 0.1;    // mastered items: ~10x rarer than fresh, but not gone
 
 function emptyProgress() {
-  return { radicals: { sound: {}, meaning: {} }, characters: { sound: {}, meaning: {} } };
+  const emptyMode = () => ({ forward: {}, reverse: {} });
+  return {
+    radicals:   { sound: emptyMode(), meaning: emptyMode() },
+    characters: { sound: emptyMode(), meaning: emptyMode() },
+  };
 }
 function loadProgress() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.radicals && parsed.characters) {
+    const v4 = localStorage.getItem("radicalsProgress_v4");
+    if (v4) {
+      const parsed = JSON.parse(v4);
+      if (parsed?.radicals?.sound?.forward && parsed?.characters?.sound?.forward) {
         state.progress = parsed;
         return;
       }
     }
-    // Migration from v2 (was a single per-mode bucket — treat as radicals)
-    const legacy = localStorage.getItem(LEGACY_KEY);
-    if (legacy) {
-      const parsed = JSON.parse(legacy);
-      if (parsed && parsed.sound && parsed.meaning) {
+    // Migrate v3 → v4: existing per-(dataset,mode) data becomes the "forward"
+    // direction; reverse-direction tracking starts empty.
+    const v3 = localStorage.getItem("radicalsProgress_v3");
+    if (v3) {
+      const parsed = JSON.parse(v3);
+      if (parsed?.radicals && parsed?.characters) {
+        state.progress = {
+          radicals: {
+            sound:   { forward: parsed.radicals.sound   || {}, reverse: {} },
+            meaning: { forward: parsed.radicals.meaning || {}, reverse: {} },
+          },
+          characters: {
+            sound:   { forward: parsed.characters.sound   || {}, reverse: {} },
+            meaning: { forward: parsed.characters.meaning || {}, reverse: {} },
+          },
+        };
+        saveProgress();
+        return;
+      }
+    }
+    // Migrate v2 → v4 (older shape, no dataset distinction — assume radicals).
+    const v2 = localStorage.getItem("radicalsProgress_v2");
+    if (v2) {
+      const parsed = JSON.parse(v2);
+      if (parsed?.sound && parsed?.meaning) {
         state.progress = emptyProgress();
-        state.progress.radicals = parsed;
+        state.progress.radicals.sound.forward   = parsed.sound;
+        state.progress.radicals.meaning.forward = parsed.meaning;
         saveProgress();
         return;
       }
@@ -1135,19 +1204,30 @@ function loadProgress() {
 function saveProgress() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.progress)); } catch {}
 }
-function bucket(dataset = state.dataset, mode = state.mode) {
-  return state.progress[dataset]?.[mode] || {};
+
+// Storage key for an entry, given the active script.
+// - 山 (no trad form)        → always "山" (simp/trad share mastery)
+// - 国 / 國 (trad differs)   → "国" in simp mode, "國" in trad mode (separate)
+function progressKey(entry, script = state.script) {
+  if (!entry.trad) return entry.char;
+  return script === "trad" ? entry.trad : entry.char;
 }
-function entryFor(r, dataset = state.dataset, mode = state.mode) {
-  return bucket(dataset, mode)[r.char] || { w: DEFAULT_WEIGHT, s: 0, m: false };
+
+function bucket(dataset = state.dataset, mode = state.mode, direction = state.direction) {
+  return state.progress[dataset]?.[mode]?.[direction] || {};
 }
-function setEntry(r, e, dataset = state.dataset, mode = state.mode) {
-  const b = state.progress[dataset][mode];
-  if (e.w === DEFAULT_WEIGHT && e.s === 0 && !e.m) delete b[r.char];
-  else b[r.char] = e;
+function entryFor(r, dataset = state.dataset, mode = state.mode, direction = state.direction, script = state.script) {
+  const k = progressKey(r, script);
+  return bucket(dataset, mode, direction)[k] || { w: DEFAULT_WEIGHT, s: 0, m: false };
 }
-function isMastered(r, dataset = state.dataset, mode = state.mode) {
-  return entryFor(r, dataset, mode).m;
+function setEntry(r, e, dataset = state.dataset, mode = state.mode, direction = state.direction, script = state.script) {
+  const k = progressKey(r, script);
+  const b = state.progress[dataset][mode][direction];
+  if (e.w === DEFAULT_WEIGHT && e.s === 0 && !e.m) delete b[k];
+  else b[k] = e;
+}
+function isMastered(r, dataset = state.dataset, mode = state.mode, direction = state.direction, script = state.script) {
+  return entryFor(r, dataset, mode, direction, script).m;
 }
 function weightOf(r) {
   const e = entryFor(r);
@@ -1170,11 +1250,25 @@ function bumpRight(r) {
   saveProgress();
   return justMastered;
 }
-function masteredCount(dataset, mode) {
-  return Object.values(bucket(dataset, mode)).filter(e => e.m).length;
+// Count entries currently mastered in the given (dataset, mode, direction, script).
+// Iterates the pool and counts hits in the bucket — necessary because the
+// bucket can store both simp and trad keys for the same entry.
+function masteredCount(dataset, mode, direction = state.direction, script = state.script) {
+  const b = bucket(dataset, mode, direction);
+  let count = 0;
+  for (const entry of DATASETS[dataset]) {
+    if (b[progressKey(entry, script)]?.m) count++;
+  }
+  return count;
 }
-function strugglingCount(dataset = state.dataset, mode = state.mode) {
-  return Object.values(bucket(dataset, mode)).filter(e => e.w > DEFAULT_WEIGHT).length;
+function strugglingCount(dataset = state.dataset, mode = state.mode, direction = state.direction, script = state.script) {
+  const b = bucket(dataset, mode, direction);
+  let count = 0;
+  for (const entry of DATASETS[dataset]) {
+    const e = b[progressKey(entry, script)];
+    if (e && e.w > DEFAULT_WEIGHT) count++;
+  }
+  return count;
 }
 function weightedPick(pool) {
   const filtered = pool.length > 1 && state.lastChar
@@ -1193,14 +1287,25 @@ function weightedPick(pool) {
 const $ = (id) => document.getElementById(id);
 
 function renderProgressDisplay() {
-  const r = RADICALS.length, c = CHARACTERS.length;
-  const rs = masteredCount("radicals", "sound");
-  const rm = masteredCount("radicals", "meaning");
-  const cs = masteredCount("characters", "sound");
-  const cm = masteredCount("characters", "meaning");
-  $("progress-display").innerHTML =
-    `<span class="ds-line">部 Radicals · 🔊 ${rs}/${r} · 💡 ${rm}/${r} mastered</span>` +
-    `<span class="ds-line">字 Characters · 🔊 ${cs}/${c} · 💡 ${cm}/${c} mastered</span>`;
+  // Shows each dataset's 4 mastery buckets (mode × direction) for the active
+  // script. Switch the 简/繁 toggle and re-open to see the other script's
+  // numbers — they differ only for entries with a separate traditional form.
+  const scriptLabel = state.script === "trad" ? "繁 Traditional" : "简 Simplified";
+  const parts = [`<div class="progress-script-note">Showing for: ${scriptLabel}</div>`];
+  for (const ds of ["radicals", "characters"]) {
+    const total = DATASETS[ds].length;
+    const dsLabel = ds === "radicals" ? "部 Radicals" : "字 Characters";
+    parts.push(`<div class="ds-group">${dsLabel} <span class="ds-total">(${total})</span></div>`);
+    for (const mode of ["sound", "meaning"]) {
+      const modeLabel = mode === "sound" ? "🔊 Sound" : "💡 Meaning";
+      const fwd = masteredCount(ds, mode, "forward");
+      const rev = masteredCount(ds, mode, "reverse");
+      parts.push(
+        `<div class="ds-line">${modeLabel} — Recognize <b>${fwd}</b> · Recall <b>${rev}</b></div>`
+      );
+    }
+  }
+  $("progress-display").innerHTML = parts.join("");
 }
 function openMenu()  { renderProgressDisplay(); $("menu-modal").classList.remove("hidden"); }
 function closeMenu() { $("menu-modal").classList.add("hidden"); }
@@ -1218,8 +1323,11 @@ function nextQuestion() {
 }
 
 // Render the UI for whatever's currently in state.current. Lets us swap modes
-// without changing the character — useful for self-checking "do I remember
-// this in the other mode too?"
+// or direction without changing the character — useful for self-checking
+// "do I remember this in the other mode/direction too?"
+//
+// Forward direction: prompt = character, options = pinyin or meaning text
+// Reverse direction: prompt = pinyin/meaning text, options = characters
 function renderQuestion() {
   state.answering = true;
   $("feedback").textContent = "";
@@ -1228,35 +1336,57 @@ function renderQuestion() {
 
   const target = state.current;
   const pool = activeDataset();
-  const key = answerKey();
+  const key = answerKey();          // "pinyin" | "meaning"
+  const reverse = state.direction === "reverse";
 
-  // Build 3 distractors with distinct answer values (so no duplicate buttons).
-  // Pull distractors from the FULL set so mastered items can still appear as plausible options.
-  const seen = new Set([target[key]]);
+  // The "option side" is what fills the option buttons.
+  // Forward → option side is the answer text (key).
+  // Reverse → option side is the character itself.
+  const optionValue = (entry) => reverse ? entry.char : entry[key];
+
+  // Build 3 distractors with distinct option-side values (no duplicate buttons).
+  const seen = new Set([optionValue(target)]);
   const distractors = [];
   const candidates = pool.filter(r => r !== target);
   while (distractors.length < 3 && candidates.length > 0) {
     const idx = Math.floor(Math.random() * candidates.length);
     const c = candidates.splice(idx, 1)[0];
-    if (!seen.has(c[key])) {
-      seen.add(c[key]);
+    const v = optionValue(c);
+    if (!seen.has(v)) {
+      seen.add(v);
       distractors.push(c);
     }
   }
-
   const options = [target, ...distractors].sort(() => Math.random() - 0.5);
 
-  $("prompt-label").textContent = state.mode === "sound"
-    ? "What is the SOUND (pinyin)?"
-    : "What is the MEANING?";
-  radical.textContent = displayChar(target);
+  // Prompt label
+  if (reverse) {
+    $("prompt-label").textContent = state.mode === "sound"
+      ? "Which character has this SOUND?"
+      : "Which character has this MEANING?";
+  } else {
+    $("prompt-label").textContent = state.mode === "sound"
+      ? "What is the SOUND (pinyin)?"
+      : "What is the MEANING?";
+  }
 
+  // Big prompt area
+  if (reverse) {
+    radical.textContent = target[key];
+    radical.classList.add("text-prompt");
+  } else {
+    radical.textContent = displayChar(target);
+    radical.classList.remove("text-prompt");
+  }
+
+  // Options
   const wrap = $("options");
   wrap.innerHTML = "";
   for (const opt of options) {
     const btn = document.createElement("button");
-    btn.className = "option";
-    btn.textContent = opt[key];
+    btn.className = "option" + (reverse ? " char-option" : "");
+    btn.textContent = reverse ? displayChar(opt) : opt[key];
+    btn._entry = opt;   // remember which entry this button represents
     btn.addEventListener("click", () => handleAnswer(btn, opt));
     wrap.appendChild(btn);
   }
@@ -1266,15 +1396,17 @@ function handleAnswer(btn, chosen) {
   if (!state.answering) return;
   state.answering = false;
 
-  const key = answerKey();
-  const correct = chosen[key] === state.current[key];
+  // chosen and state.current are entry objects, so identity comparison works
+  // regardless of direction (forward = pick text, reverse = pick char).
+  const correct = chosen === state.current;
   const radical = $("radical");
 
-  // Mark all buttons
+  // Mark all buttons by entry identity (not text), so reverse-mode trad/simp
+  // display changes don't break the match.
   const allBtns = document.querySelectorAll("#options .option");
   allBtns.forEach(b => {
     b.disabled = true;
-    if (b.textContent === state.current[key]) b.classList.add("correct");
+    if (b._entry === state.current) b.classList.add("correct");
   });
 
   let justMastered = false;
@@ -1331,6 +1463,12 @@ function refreshScriptToggle() {
     ? "Showing simplified characters (Mainland China · e.g. 国, 学) — click to switch to Traditional"
     : "Showing traditional characters (Taiwan, Hong Kong · e.g. 國, 學) — click to switch to Simplified";
 }
+function refreshDirectionToggle() {
+  setActiveLabel("direction-btn", state.direction);
+  $("direction-btn").title = state.direction === "forward"
+    ? "Recognize: shown a character, pick its pinyin / meaning. Click to switch to Recall (harder)."
+    : "Recall: shown a pinyin / meaning, pick the matching character. Click to switch back to Recognize.";
+}
 
 function setDataset(dataset) {
   if (dataset !== "radicals" && dataset !== "characters") return;
@@ -1363,8 +1501,33 @@ function setScript(script) {
   state.script = script;
   saveScript();
   refreshScriptToggle();
-  // Same item — just swap the display
-  if (state.current) $("radical").textContent = displayChar(state.current);
+  updateStats();                                  // counter changes for trad-different entries
+  if (menuOpen()) renderProgressDisplay();        // modal numbers depend on script too
+  if (!state.current) return;
+  // Update wherever a character is displayed, without re-rolling the question.
+  if (state.direction === "forward") {
+    $("radical").textContent = displayChar(state.current);
+  } else {
+    // Reverse mode: the prompt is text (unchanged), but each option button
+    // is a character that needs re-rendering to the new script.
+    document.querySelectorAll("#options .option").forEach(b => {
+      if (b._entry) b.textContent = displayChar(b._entry);
+    });
+  }
+}
+
+function setDirection(direction) {
+  if (direction !== "forward" && direction !== "reverse") return;
+  if (state.direction === direction) return;
+  state.direction = direction;
+  saveDirection();
+  refreshDirectionToggle();
+  updateStats();                                  // mastery is now per-direction
+  // Recognize vs Recall are different angles on the same item, like mode
+  // switching. If they haven't answered yet, keep the character and rebuild
+  // the options for the new direction. Otherwise the in-flight setTimeout
+  // will pick a new question that respects the new direction.
+  if (state.current && state.answering) renderQuestion();
 }
 
 $("dataset-btn").addEventListener("click", () =>
@@ -1373,6 +1536,8 @@ $("mode-btn").addEventListener("click", () =>
   setMode(state.mode === "sound" ? "meaning" : "sound"));
 $("script-btn").addEventListener("click", () =>
   setScript(state.script === "simp" ? "trad" : "simp"));
+$("direction-btn").addEventListener("click", () =>
+  setDirection(state.direction === "forward" ? "reverse" : "forward"));
 
 $("menu-btn").addEventListener("click", openMenu);
 $("close-modal").addEventListener("click", closeMenu);
@@ -1404,9 +1569,11 @@ loadProgress();
 loadMode();
 loadDataset();
 loadScript();
+loadDirection();
 refreshDatasetToggle();
 refreshModeToggle();
 refreshScriptToggle();
+refreshDirectionToggle();
 state.score = 0;
 state.streak = 0;
 state.bestStreak = 0;
