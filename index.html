@@ -173,9 +173,10 @@
   #progress-display .ds-group:first-of-type { margin-top: 0; }
   #progress-display .ds-total { font-weight: 400; color: var(--muted); font-size: 12px; }
   #progress-display .ds-line {
-    padding-left: 16px; white-space: nowrap;
+    padding-left: 16px;
   }
   #progress-display .ds-line b { color: var(--text); }
+  #progress-display .ds-aux { font-size: 11px; opacity: 0.7; }
   .modal-actions {
     display: flex; justify-content: space-between; align-items: center; gap: 12px;
   }
@@ -1146,8 +1147,11 @@ const STORAGE_KEY = "radicalsProgress_v4";
 const DEFAULT_WEIGHT = 1;
 const WRONG_BONUS = 4;          // wrong answer adds this to weight
 const RIGHT_DECAY = 1;          // correct answer subtracts this (floored at 1)
+const MAX_WEIGHT = 16;          // cap miss-weight so one item can't dominate forever
 const MASTERY_THRESHOLD = 3;    // correct-in-a-row needed to master
 const MASTERED_WEIGHT = 0.1;    // mastered items: ~10x rarer than fresh, but not gone
+const ACTIVE_TARGET = 8;        // size of the active-rotation pool (Leitner-style)
+const REVIEW_PROBABILITY = 0.10;// chance any given question is a mastered-item review
 
 function emptyProgress() {
   const emptyMode = () => ({ forward: {}, reverse: {} });
@@ -1235,7 +1239,7 @@ function weightOf(r) {
 }
 function bumpWrong(r) {
   const e = entryFor(r);
-  setEntry(r, { w: e.w + WRONG_BONUS, s: 0, m: false });
+  setEntry(r, { w: Math.min(e.w + WRONG_BONUS, MAX_WEIGHT), s: 0, m: false });
   saveProgress();
 }
 function bumpRight(r) {
@@ -1284,24 +1288,75 @@ function weightedPick(pool) {
   return filtered[filtered.length - 1];
 }
 
+// Bucket each entry by its progress state in the given (dataset, mode,
+// direction, script). Used both for adaptive picking and for the
+// "in rotation" counts in the modal.
+function categorize(pool,
+                    dataset = state.dataset,
+                    mode = state.mode,
+                    direction = state.direction,
+                    script = state.script) {
+  const fresh = [], learning = [], mastered = [];
+  for (const entry of pool) {
+    const e = entryFor(entry, dataset, mode, direction, script);
+    if (e.m) mastered.push(entry);
+    else if (e.s > 0 || e.w > DEFAULT_WEIGHT) learning.push(entry);
+    else fresh.push(entry);
+  }
+  return { fresh, learning, mastered };
+}
+
+// Adaptive picker (Leitner-style):
+//   - Keep at most ACTIVE_TARGET unknowns in active rotation at any time.
+//   - Only introduce a new fresh item when an active one gets mastered
+//     (or the active pool starts below capacity).
+//   - With probability REVIEW_PROBABILITY, slip in a mastered-item review
+//     instead. Keeps long-term retention without flooding the user.
+function pickNextEntry() {
+  const pool = activeDataset();
+  const { fresh, learning, mastered } = categorize(pool);
+
+  // Everything's mastered (or already in review-only state): pick from those.
+  if (learning.length === 0 && fresh.length === 0) {
+    return weightedPick(mastered.length > 0 ? mastered : pool);
+  }
+
+  // Occasional mastered-item review.
+  if (mastered.length > 0 && Math.random() < REVIEW_PROBABILITY) {
+    return weightedPick(mastered);
+  }
+
+  // Active pool = items currently being learned, topped up with just enough
+  // fresh items to reach the rotation target. Fresh items are pulled in
+  // dataset order, which is roughly frequency / pedagogical order.
+  const slotsToFill = Math.max(0, ACTIVE_TARGET - learning.length);
+  const candidates = [...learning, ...fresh.slice(0, slotsToFill)];
+  return weightedPick(candidates);
+}
+
 const $ = (id) => document.getElementById(id);
 
 function renderProgressDisplay() {
-  // Shows each dataset's 4 mastery buckets (mode × direction) for the active
-  // script. Switch the 简/繁 toggle and re-open to see the other script's
-  // numbers — they differ only for entries with a separate traditional form.
+  // Per dataset × mode × direction: mastered count + items currently in
+  // active rotation. Numbers are for the active script — switch the
+  // 简/繁 toggle and they re-render.
   const scriptLabel = state.script === "trad" ? "繁 Traditional" : "简 Simplified";
-  const parts = [`<div class="progress-script-note">Showing for: ${scriptLabel}</div>`];
+  const parts = [
+    `<div class="progress-script-note">Showing for: ${scriptLabel} · active rotation capped at ${ACTIVE_TARGET}</div>`,
+  ];
   for (const ds of ["radicals", "characters"]) {
     const total = DATASETS[ds].length;
     const dsLabel = ds === "radicals" ? "部 Radicals" : "字 Characters";
     parts.push(`<div class="ds-group">${dsLabel} <span class="ds-total">(${total})</span></div>`);
     for (const mode of ["sound", "meaning"]) {
       const modeLabel = mode === "sound" ? "🔊 Sound" : "💡 Meaning";
-      const fwd = masteredCount(ds, mode, "forward");
-      const rev = masteredCount(ds, mode, "reverse");
+      const fwd = categorize(DATASETS[ds], ds, mode, "forward");
+      const rev = categorize(DATASETS[ds], ds, mode, "reverse");
       parts.push(
-        `<div class="ds-line">${modeLabel} — Recognize <b>${fwd}</b> · Recall <b>${rev}</b></div>`
+        `<div class="ds-line">${modeLabel} · Recognize <b>${fwd.mastered.length}</b> ` +
+        `<span class="ds-aux">(${fwd.learning.length} in rotation)</span> · ` +
+        `Recall <b>${rev.mastered.length}</b> ` +
+        `<span class="ds-aux">(${rev.learning.length} in rotation)</span></div>`
       );
     }
   }
@@ -1316,8 +1371,7 @@ function answerKey() {
 }
 
 function nextQuestion() {
-  const pool = activeDataset();
-  state.current = weightedPick(pool);
+  state.current = pickNextEntry();
   state.lastChar = state.current.char;
   renderQuestion();
 }
@@ -1423,6 +1477,10 @@ function handleAnswer(btn, chosen) {
     state.streak = 0;
     radical.classList.add("flash-wrong");
     bumpWrong(state.current);
+    // Also penalize the distractor the user picked. Choosing it means they
+    // associated its answer with the target, so they don't have a solid grasp
+    // of either character. Bumping it makes it reappear sooner.
+    if (chosen !== state.current) bumpWrong(chosen);
     $("feedback").innerHTML = `✗ <b>${displayChar(state.current)}</b> = ${state.current.pinyin} · ${state.current.meaning}`;
   }
   updateStats();
