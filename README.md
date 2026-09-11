@@ -27,3 +27,7 @@ then visit http://localhost:8000.
 ## Contributing
 
 Issues and pull requests are welcome.
+
+## License
+
+[MIT](LICENSE)
