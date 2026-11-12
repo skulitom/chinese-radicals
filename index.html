@@ -125,6 +125,15 @@
   .stats span b { color: var(--text); font-weight: 600; }
   /* Reserve enough horizontal space so digit-count changes don't reflow neighbours */
   #score, #streak, #mastered-stat, #total-stat { display: inline-block; min-width: 1.4em; }
+  /* Mastery counter doubles as the Learn / Review switch */
+  .study-btn {
+    background: none; border: 1px solid transparent; border-radius: 6px;
+    color: inherit; font: inherit; padding: 2px 6px; margin: -3px -7px;
+    cursor: pointer; transition: all 0.15s ease;
+  }
+  .study-btn:hover { border-color: var(--accent); background: var(--panel-2); }
+  .study-btn b { color: var(--text); font-weight: 600; }
+  .study-btn.review { border-color: var(--border); }
   .end-btn {
     background: transparent; border: 1px solid var(--border);
     color: var(--muted); width: 28px; height: 28px; border-radius: 6px;
@@ -274,7 +283,7 @@
     <div class="stats" id="stats">
       <span>Score: <b id="score">0</b></span>
       <span>Streak: <b id="streak">0</b></span>
-      <span title="Items in this deck and quiz mode that you've gotten right 3 times in a row">🎓 <b id="mastered-stat">0</b>/<span id="total-stat">0</span></span>
+      <button class="study-btn" id="study-btn"><span id="study-icon">🌱</span> <b id="mastered-stat">0</b>/<span id="total-stat">0</span></button>
     </div>
   </div>
   <div class="header-right">
@@ -1083,6 +1092,7 @@ const state = {
   script: "simp",      // "simp" | "trad"
   direction: "forward",// "forward" (show char → pick text) | "reverse" (show text → pick char)
   difficulty: "easy",  // "easy" (4 options) | "medium" (6) | "hard" (8)
+  study: "learn",      // "learn" (introduce new items) | "review" (only items already started)
   score: 0,
   streak: 0,
   bestStreak: 0,
@@ -1149,6 +1159,17 @@ function loadDifficulty() {
 }
 function saveDifficulty() {
   try { localStorage.setItem(DIFFICULTY_KEY, state.difficulty); } catch {}
+}
+
+const STUDY_KEY = "radicalsStudy_v1";
+function loadStudy() {
+  try {
+    const s = localStorage.getItem(STUDY_KEY);
+    if (s === "learn" || s === "review") state.study = s;
+  } catch {}
+}
+function saveStudy() {
+  try { localStorage.setItem(STUDY_KEY, state.study); } catch {}
 }
 
 // Display a character honoring the simp/trad toggle. Storage stays keyed on
@@ -1296,15 +1317,15 @@ function strugglingCount(dataset = state.dataset, mode = state.mode, direction =
   }
   return count;
 }
-function weightedPick(pool) {
+function weightedPick(pool, weight = weightOf) {
   const filtered = pool.length > 1 && state.lastChar
     ? pool.filter(r => r.char !== state.lastChar)
     : pool;
   let total = 0;
-  for (const r of filtered) total += weightOf(r);
+  for (const r of filtered) total += weight(r);
   let roll = Math.random() * total;
   for (const r of filtered) {
-    roll -= weightOf(r);
+    roll -= weight(r);
     if (roll <= 0) return r;
   }
   return filtered[filtered.length - 1];
@@ -1337,6 +1358,17 @@ function categorize(pool,
 function pickNextEntry() {
   const pool = activeDataset();
   const { fresh, learning, mastered } = categorize(pool);
+
+  // Review mode: only items already started (in rotation or mastered), no
+  // new ones. Mastered items get a normal weight here (not the 0.1 used in
+  // learn mode) and items you've been missing come up more often.
+  // Nothing started yet → fall through to the learn-mode picker.
+  if (state.study === "review" && learning.length + mastered.length > 0) {
+    return weightedPick([...learning, ...mastered], (r) => {
+      const e = entryFor(r);
+      return e.m ? DEFAULT_WEIGHT : e.w + DEFAULT_WEIGHT;
+    });
+  }
 
   // Everything's mastered (or already in review-only state): pick from those.
   if (learning.length === 0 && fresh.length === 0) {
@@ -1542,6 +1574,7 @@ function updateStats() {
   $("streak").textContent = state.streak;
   $("mastered-stat").textContent = masteredCount(state.dataset, state.mode);
   $("total-stat").textContent = activeDataset().length;
+  refreshStudyToggle();   // tooltip shows how many items are in the review pool
 }
 
 // Refresh helpers — each toggle button contains BOTH labels as inner <span>s;
@@ -1575,6 +1608,32 @@ function refreshDirectionToggle() {
   $("direction-btn").title = state.direction === "forward"
     ? "Recognize: shown a character, pick its pinyin / meaning. Click to switch to Recall (harder)."
     : "Recall: shown a pinyin / meaning, pick the matching character. Click to switch back to Recognize.";
+}
+
+function startedCount() {
+  const { learning, mastered } = categorize(activeDataset());
+  return learning.length + mastered.length;
+}
+function refreshStudyToggle() {
+  const review = state.study === "review";
+  $("study-icon").textContent = review ? "🔁" : "🌱";
+  $("study-btn").classList.toggle("review", review);
+  const started = startedCount();
+  $("study-btn").title = review
+    ? `Review: practicing only the ${started} item${started === 1 ? "" : "s"} you've already started (no new ones)` +
+      (started === 0 ? " — nothing started yet, so new items are shown" : "") +
+      `. Mastered = right 3 times in a row. Click to switch to Learn.`
+    : "Learn: new items are added as you master others. Mastered = right 3 times in a row. Click to switch to Review (only items you've started).";
+}
+function setStudy(study) {
+  if (study !== "learn" && study !== "review") return;
+  if (state.study === study) return;
+  state.study = study;
+  saveStudy();
+  refreshStudyToggle();
+  // Unlike the other toggles this changes *which* item comes up, so pick a
+  // fresh question rather than re-rendering the current one.
+  if (state.answering) nextQuestion();
 }
 
 function refreshDifficultyToggle() {
@@ -1662,6 +1721,8 @@ $("script-btn").addEventListener("click", () =>
 $("direction-btn").addEventListener("click", () =>
   setDirection(state.direction === "forward" ? "reverse" : "forward"));
 
+$("study-btn").addEventListener("click", () =>
+  setStudy(state.study === "learn" ? "review" : "learn"));
 $("difficulty-btn").addEventListener("click", () =>
   setDifficulty(DIFFICULTIES[(DIFFICULTIES.indexOf(state.difficulty) + 1) % DIFFICULTIES.length]));
 
@@ -1697,6 +1758,7 @@ loadDataset();
 loadScript();
 loadDirection();
 loadDifficulty();
+loadStudy();
 refreshDatasetToggle();
 refreshModeToggle();
 refreshScriptToggle();

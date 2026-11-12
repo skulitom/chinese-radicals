@@ -13,6 +13,7 @@ Drill the **214 Kangxi radicals** and **477 common Chinese characters** in your 
 - **简 / 繁 script toggle** — switch between Simplified (国, 学, 来) and Traditional (國, 學, 來) at any time.
 - **Adaptive picking** — Leitner-style weighting brings back the items you miss, and the wrong answer you chose, more often.
 - **Mastery tracking** — three correct answers in a row marks an item as mastered; score, streak and mastered count are shown in the header.
+- **Learn / Review** — click the mastered counter to switch between 🌱 Learn (new items are introduced as you master others) and 🔁 Review (only items you've already started, weakest first).
 - **Private by default** — progress lives in your browser's `localStorage`. No account, no tracking.
 
 ## Running locally
