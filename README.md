@@ -9,6 +9,7 @@ Drill the **214 Kangxi radicals** and **477 common Chinese characters** in your 
 - **Two decks** — 部 Radicals (the building blocks of every hanzi) or 字 Characters (the most-used few hundred).
 - **Two quiz modes** — 🔊 Sound (match to pinyin) or 💡 Meaning (match to English).
 - **Two directions** — → Recognize (character → answer) or ← Recall (answer → character).
+- **Three difficulties** — ● Easy (4 choices, 2×2), ●● Medium (6 choices, 3×2) or ●●● Hard (8 choices, 4×2). Keys 1–8 pick an answer.
 - **简 / 繁 script toggle** — switch between Simplified (国, 学, 来) and Traditional (國, 學, 來) at any time.
 - **Adaptive picking** — Leitner-style weighting brings back the items you miss, and the wrong answer you chose, more often.
 - **Mastery tracking** — three correct answers in a row marks an item as mastered; score, streak and mastered count are shown in the header.

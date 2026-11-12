@@ -234,6 +234,9 @@
     font-size: 40px; padding: 18px;
     font-family: "SimSun", "Noto Serif CJK SC", "Microsoft YaHei", serif;
   }
+  /* Hard (4x2) — tighten so 8 buttons still fit without scrolling */
+  .options.dense .option { padding: 12px; }
+  .options.dense .option.char-option { font-size: 34px; padding: 10px; }
   .feedback {
     margin-top: 18px; min-height: 24px; font-size: 14px; color: var(--muted);
   }
@@ -291,6 +294,11 @@
       <button class="toggle-btn" id="direction-btn">
         <span data-when="forward">→ Recognize</span>
         <span data-when="reverse">← Recall</span>
+      </button>
+      <button class="toggle-btn" id="difficulty-btn">
+        <span data-when="easy">● Easy</span>
+        <span data-when="medium">●● Medium</span>
+        <span data-when="hard">●●● Hard</span>
       </button>
     </div>
     <button class="end-btn" id="menu-btn" title="Progress & reset">⋯</button>
@@ -1074,6 +1082,7 @@ const state = {
   mode: "sound",       // "sound" | "meaning"
   script: "simp",      // "simp" | "trad"
   direction: "forward",// "forward" (show char → pick text) | "reverse" (show text → pick char)
+  difficulty: "easy",  // "easy" (4 options) | "medium" (6) | "hard" (8)
   score: 0,
   streak: 0,
   bestStreak: 0,
@@ -1127,6 +1136,19 @@ function loadDirection() {
 }
 function saveDirection() {
   try { localStorage.setItem(DIRECTION_KEY, state.direction); } catch {}
+}
+
+const DIFFICULTY_KEY = "radicalsDifficulty_v1";
+const DIFFICULTIES = ["easy", "medium", "hard"];
+const OPTION_COUNT = { easy: 4, medium: 6, hard: 8 };   // 2x2, 3x2, 4x2
+function loadDifficulty() {
+  try {
+    const d = localStorage.getItem(DIFFICULTY_KEY);
+    if (DIFFICULTIES.includes(d)) state.difficulty = d;
+  } catch {}
+}
+function saveDifficulty() {
+  try { localStorage.setItem(DIFFICULTY_KEY, state.difficulty); } catch {}
 }
 
 // Display a character honoring the simp/trad toggle. Storage stays keyed on
@@ -1366,8 +1388,30 @@ function openMenu()  { renderProgressDisplay(); $("menu-modal").classList.remove
 function closeMenu() { $("menu-modal").classList.add("hidden"); }
 function menuOpen()  { return !$("menu-modal").classList.contains("hidden"); }
 
-function answerKey() {
-  return state.mode === "sound" ? "pinyin" : "meaning";
+// Some glosses carry a usage example, e.g. "friend (朋友)". During the
+// question that would give the answer away (the compound contains the very
+// character being tested), so strip Chinese from the parenthetical while
+// keeping any English note: "silver (银行 bank)" → "silver (bank)".
+// The full gloss is still shown in the feedback line after answering.
+const HAN_RE = /[\u3400-\u9fff\uf900-\ufaff]/;
+const HAN_RUN_RE = /[\u3400-\u9fff\uf900-\ufaff]+/g;
+function quizMeaning(entry) {
+  return entry.meaning
+    .replace(/\(([^)]*)\)/g, (whole, inner) => {
+      if (!HAN_RE.test(inner)) return whole;
+      const rest = inner
+        .replace(HAN_RUN_RE, "")
+        .replace(/^[\s=]+|[\s=]+$/g, "")
+        .trim();
+      return rest ? `(${rest})` : "";
+    })
+    .replace(/,\s*$/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+// Text shown for an entry on the question side (option button or prompt).
+function answerText(entry) {
+  return state.mode === "sound" ? entry.pinyin : quizMeaning(entry);
 }
 
 function nextQuestion() {
@@ -1390,22 +1434,26 @@ function renderQuestion() {
 
   const target = state.current;
   const pool = activeDataset();
-  const key = answerKey();          // "pinyin" | "meaning"
   const reverse = state.direction === "reverse";
 
   // The "option side" is what fills the option buttons.
-  // Forward → option side is the answer text (key).
+  // Forward → option side is the answer text (pinyin or meaning).
   // Reverse → option side is the character itself.
-  const optionValue = (entry) => reverse ? entry.char : entry[key];
+  const optionValue = (entry) => reverse ? entry.char : answerText(entry);
+  const numDistractors = (OPTION_COUNT[state.difficulty] || 4) - 1;
 
-  // Build 3 distractors with distinct option-side values (no duplicate buttons).
+  // Build distractors with distinct option-side values (no duplicate buttons).
+  // In reverse mode also skip distractors whose answer text matches the
+  // target's (e.g. 他/她 both "tā") — otherwise two buttons would be correct.
   const seen = new Set([optionValue(target)]);
+  const targetText = answerText(target);
   const distractors = [];
   const candidates = pool.filter(r => r !== target);
-  while (distractors.length < 3 && candidates.length > 0) {
+  while (distractors.length < numDistractors && candidates.length > 0) {
     const idx = Math.floor(Math.random() * candidates.length);
     const c = candidates.splice(idx, 1)[0];
     const v = optionValue(c);
+    if (reverse && answerText(c) === targetText) continue;
     if (!seen.has(v)) {
       seen.add(v);
       distractors.push(c);
@@ -1426,7 +1474,7 @@ function renderQuestion() {
 
   // Big prompt area
   if (reverse) {
-    radical.textContent = target[key];
+    radical.textContent = answerText(target);
     radical.classList.add("text-prompt");
   } else {
     radical.textContent = displayChar(target);
@@ -1436,10 +1484,11 @@ function renderQuestion() {
   // Options
   const wrap = $("options");
   wrap.innerHTML = "";
+  wrap.classList.toggle("dense", options.length > 6);
   for (const opt of options) {
     const btn = document.createElement("button");
     btn.className = "option" + (reverse ? " char-option" : "");
-    btn.textContent = reverse ? displayChar(opt) : opt[key];
+    btn.textContent = reverse ? displayChar(opt) : answerText(opt);
     btn._entry = opt;   // remember which entry this button represents
     btn.addEventListener("click", () => handleAnswer(btn, opt));
     wrap.appendChild(btn);
@@ -1528,6 +1577,22 @@ function refreshDirectionToggle() {
     : "Recall: shown a pinyin / meaning, pick the matching character. Click to switch back to Recognize.";
 }
 
+function refreshDifficultyToggle() {
+  setActiveLabel("difficulty-btn", state.difficulty);
+  const n = OPTION_COUNT[state.difficulty];
+  $("difficulty-btn").title = `Difficulty: ${state.difficulty} — ${n} answer choices. Click to cycle Easy → Medium → Hard.`;
+}
+
+function setDifficulty(difficulty) {
+  if (!DIFFICULTIES.includes(difficulty)) return;
+  if (state.difficulty === difficulty) return;
+  state.difficulty = difficulty;
+  saveDifficulty();
+  refreshDifficultyToggle();
+  // Same character, more/fewer choices — like the other toggles.
+  if (state.current && state.answering) renderQuestion();
+}
+
 function setDataset(dataset) {
   if (dataset !== "radicals" && dataset !== "characters") return;
   if (state.dataset === dataset) return;
@@ -1597,6 +1662,9 @@ $("script-btn").addEventListener("click", () =>
 $("direction-btn").addEventListener("click", () =>
   setDirection(state.direction === "forward" ? "reverse" : "forward"));
 
+$("difficulty-btn").addEventListener("click", () =>
+  setDifficulty(DIFFICULTIES[(DIFFICULTIES.indexOf(state.difficulty) + 1) % DIFFICULTIES.length]));
+
 $("menu-btn").addEventListener("click", openMenu);
 $("close-modal").addEventListener("click", closeMenu);
 $("menu-modal").addEventListener("click", (e) => {
@@ -1611,12 +1679,12 @@ $("reset-progress").addEventListener("click", () => {
   }
 });
 
-// Keyboard: 1-4 picks an option · Esc closes the menu
+// Keyboard: 1-8 picks an option · Esc closes the menu
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && menuOpen()) { closeMenu(); return; }
   if (menuOpen()) return;
   const n = parseInt(e.key, 10);
-  if (n >= 1 && n <= 4) {
+  if (n >= 1 && n <= 8) {
     const btns = document.querySelectorAll("#options .option");
     if (btns[n - 1] && !btns[n - 1].disabled) btns[n - 1].click();
   }
@@ -1628,10 +1696,12 @@ loadMode();
 loadDataset();
 loadScript();
 loadDirection();
+loadDifficulty();
 refreshDatasetToggle();
 refreshModeToggle();
 refreshScriptToggle();
 refreshDirectionToggle();
+refreshDifficultyToggle();
 state.score = 0;
 state.streak = 0;
 state.bestStreak = 0;
